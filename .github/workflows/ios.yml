@@ -8,6 +8,9 @@ on:
   push:
     paths: ["ios/**", ".github/workflows/ios.yml"]
 
+permissions:
+  contents: write  # to publish the IPA as the "latest" release
+
 jobs:
   build:
     runs-on: macos-15
@@ -39,3 +42,10 @@ jobs:
         with:
           name: EasyScreenShare-unsigned-ipa
           path: ios/EasyScreenShare-unsigned.ipa
+      - name: Publish as "latest" release (downloadable without signing in)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest EasyScreenShare-unsigned.ipa             --title "Latest iOS build" --target "$GITHUB_SHA"             --notes "Unsigned build of $GITHUB_SHA. Install with Sideloadly or AltStore."
