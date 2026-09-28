@@ -42,6 +42,7 @@ The iOS app has to be compiled on a Mac (Apple's rule). Pick one:
 **B. No Mac: build on GitHub, sideload from Windows**
 1. Push this folder to a GitHub repo. The workflow in `.github/workflows/ios.yml` builds an unsigned `EasyScreenShare-unsigned.ipa` (Actions tab › *Build iOS app* › *Run workflow* › download the artifact).
 2. Install it with [Sideloadly](https://sideloadly.io) (or AltStore) using your Apple ID. With a free Apple ID the app has to be re-installed every 7 days.
+   Install it as a normal app, **not inside LiveContainer**: LiveContainer can't run app extensions, and the screen broadcast is one. Don't let the installer remove app extensions.
 
 On the phone you may need to enable **Settings › Privacy & Security › Developer Mode**, and trust your developer profile under *Settings › General › VPN & Device Management*.
 
