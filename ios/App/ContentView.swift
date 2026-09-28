@@ -67,8 +67,7 @@ struct ContentView: View {
     private var diagnostics: String {
         let app = Bundle.main.bundleIdentifier ?? "?"
         let broadcast = BroadcastPickerView.broadcastExtensionID ?? "MISSING"
-        return "iOS \(UIDevice.current.systemVersion) · app \(app)
-broadcast extension: \(broadcast)"
+        return "iOS \(UIDevice.current.systemVersion) · app \(app)\nbroadcast extension: \(broadcast)"
     }
 
     @ViewBuilder private var status: some View {
