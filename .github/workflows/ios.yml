@@ -25,6 +25,10 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+      - name: Show Info.plists
+        run: |
+          plutil -p build/Build/Products/Release-iphoneos/EasyScreenShare.app/Info.plist
+          plutil -p build/Build/Products/Release-iphoneos/EasyScreenShare.app/PlugIns/EasyScreenShareBroadcast.appex/Info.plist
       - name: Package IPA
         run: |
           mkdir -p Payload
