@@ -28,7 +28,7 @@ struct BroadcastPickerView: UIViewRepresentable {
 
     /// The embedded broadcast extension's bundle ID, read from the installed app
     /// rather than hard-coded: sideloading tools re-sign with different bundle IDs.
-    private static var broadcastExtensionID: String? {
+    static var broadcastExtensionID: String? {
         guard let plugIns = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: plugIns, includingPropertiesForKeys: nil)
         else { return nil }

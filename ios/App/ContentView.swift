@@ -39,6 +39,12 @@ struct ContentView: View {
 
             Spacer()
 
+            Text(diagnostics)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+
             BroadcastPickerView(controller: picker)
                 .frame(width: 1, height: 1)
                 .opacity(0.01)
@@ -55,6 +61,14 @@ struct ContentView: View {
                 if !isStreaming { browser.search() }
             }
         }
+    }
+
+    /// Shown small at the bottom so problems with sideloading can be diagnosed.
+    private var diagnostics: String {
+        let app = Bundle.main.bundleIdentifier ?? "?"
+        let broadcast = BroadcastPickerView.broadcastExtensionID ?? "MISSING"
+        return "iOS \(UIDevice.current.systemVersion) · app \(app)
+broadcast extension: \(broadcast)"
     }
 
     @ViewBuilder private var status: some View {
