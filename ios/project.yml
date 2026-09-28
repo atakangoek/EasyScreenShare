@@ -38,7 +38,6 @@ targets:
            UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSLocalNetworkUsageDescription: EasyScreenShare finds your PC on the local network to stream your screen to it.
         NSBonjourServices: [_easyscreenshare._tcp]
-        BroadcastExtensionBundleID: $(APP_BUNDLE_ID).broadcast
 
   EasyScreenShareBroadcast:
     type: app-extension

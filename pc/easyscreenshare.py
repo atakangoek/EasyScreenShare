@@ -50,7 +50,7 @@ HELLO_TIMEOUT = 10.0
 ORIENTATION_TO_ROTATION = {1: 0, 2: 0, 3: 180, 4: 180, 5: -90, 6: 90, 7: 90, 8: -90}
 
 
-VIRTUAL_ADAPTER_HINTS = ("vethernet", "hyper-v", "wsl", "virtualbox", "vmware", "loopback", "bluetooth")
+VIRTUAL_ADAPTER_HINTS = ("vethernet", "hyper-v", "wsl", "virtualbox", "vmware", "loopback", "bluetooth", "tailscale", "zerotier")
 
 
 def local_ipv4_addresses() -> list[str]:
