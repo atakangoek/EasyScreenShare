@@ -1,55 +1,37 @@
 import Foundation
-import Network
 
-/// Looks for EasyScreenShare PCs on the local network so the app can show
-/// whether one is reachable. Browsing here also triggers the Local Network
-/// permission prompt, which the broadcast extension then shares.
-@MainActor
+/// Looks for EasyScreenShare PCs so the app can show whether one is reachable.
+/// Searching here also triggers the Local Network permission prompt, which
+/// the broadcast extension then shares. Everything runs on the main queue.
 final class PCBrowser: ObservableObject {
     enum Status: Equatable {
         case searching
         case found([String])
+        case notFound
         case permissionDenied
-        case failed(String)
     }
 
     @Published private(set) var status: Status = .searching
-    private var browser: NWBrowser?
+    private var finder: PCFinder?
+    private var names: [String] = []
 
-    func start() {
-        guard browser == nil else { return }
-        let browser = NWBrowser(for: .bonjour(type: StreamProtocol.serviceType, domain: nil), using: .tcp)
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            let names = results.map(\.endpoint).sorted { $0.debugDescription < $1.debugDescription }.compactMap { endpoint -> String? in
-                if case let .service(name, _, _, _) = endpoint { return name }
-                return nil
-            }
-            Task { @MainActor in self?.status = names.isEmpty ? .searching : .found(names) }
-        }
-        browser.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in
-                switch state {
-                case .waiting(let error), .failed(let error):
-                    if case .dns(let code) = error, code == StreamProtocol.dnsPolicyDenied {
-                        self?.status = .permissionDenied
-                    } else if case .failed = state {
-                        self?.status = .failed(error.localizedDescription)
-                    }
-                case .ready:
-                    if self?.status == .permissionDenied { self?.status = .searching }
-                default:
-                    break
-                }
-            }
-        }
-        browser.start(queue: .main)
-        self.browser = browser
-    }
-
-    func restart() {
-        browser?.cancel()
-        browser = nil
+    func search() {
+        finder?.stop()
+        names = []
         status = .searching
-        start()
+
+        let finder = PCFinder(queue: .main)
+        finder.onFound = { [weak self] pc in
+            pc.connection.cancel()  // we only wanted to know it's there
+            guard let self else { return }
+            self.names = (self.names + [pc.name]).sorted()
+            self.status = .found(self.names)
+        }
+        finder.onScanFinished = { [weak self] localNetworkDenied in
+            guard let self, self.names.isEmpty else { return }
+            self.status = localNetworkDenied ? .permissionDenied : .notFound
+        }
+        self.finder = finder
+        finder.start()
     }
 }

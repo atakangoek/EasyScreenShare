@@ -17,6 +17,7 @@ struct ContentView: View {
                 .font(.largeTitle.bold())
 
             status
+                .multilineTextAlignment(.center)
                 .frame(minHeight: 60)
 
             Button {
@@ -44,14 +45,14 @@ struct ContentView: View {
                 .accessibilityHidden(true)
         }
         .padding(24)
-        .onAppear { browser.start() }
+        .onAppear { browser.search() }
         .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
             isStreaming = UIScreen.main.isCaptured
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
                 isStreaming = UIScreen.main.isCaptured
-                browser.restart()
+                if !isStreaming { browser.search() }
             }
         }
     }
@@ -61,7 +62,7 @@ struct ContentView: View {
         case .searching:
             HStack(spacing: 10) {
                 ProgressView()
-                Text("Looking for your PC… Start EasyScreenShare on the PC and use the same Wi-Fi.")
+                Text("Looking for your PC…")
             }
             .foregroundStyle(.secondary)
         case .found(let names):
@@ -69,7 +70,7 @@ struct ContentView: View {
                 Label("Ready: \(names[0])", systemImage: "desktopcomputer")
                     .foregroundStyle(.green)
                 if names.count > 1 {
-                    Text("\(names.count) PCs found — streaming goes to \(names[0]).")
+                    Text("\(names.count) PCs found (\(names.joined(separator: ", "))). Streaming goes to whichever answers first, so close the receiver on the others.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -83,8 +84,12 @@ struct ContentView: View {
                     }
                 }
             }
-        case .failed(let message):
-            Text(message).foregroundStyle(.red)
+        case .notFound:
+            VStack(spacing: 8) {
+                Text("No PC found. Start EasyScreenShare on the PC, use the same Wi-Fi, and allow it through Windows Firewall on private networks.")
+                    .foregroundStyle(.secondary)
+                Button("Search again") { browser.search() }
+            }
         }
     }
 }

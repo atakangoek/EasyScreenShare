@@ -51,10 +51,12 @@ def main() -> None:
     p.add_argument("--seconds", type=float, default=20)
     p.add_argument("--rotate-every", type=float, default=5)
     p.add_argument("--size", default="590x1278")
+    p.add_argument("--host", help="connect to this IP directly instead of using Bonjour")
+    p.add_argument("--port", type=int, default=50505)
     args = p.parse_args()
     w, h = map(int, args.size.split("x"))
 
-    host, port = discover(10)
+    host, port = (args.host, args.port) if args.host else discover(10)
     sock = socket.create_connection((host, port))
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     lock = threading.Lock()

@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-/// Finds the EasyScreenShare PC via Bonjour and streams messages to it over TCP.
+/// Finds the EasyScreenShare PC (see `PCFinder`) and streams messages to it over TCP.
 /// All mutable state is confined to `queue`.
 final class StreamLink {
     enum LinkError: LocalizedError {
@@ -12,7 +12,7 @@ final class StreamLink {
         var errorDescription: String? {
             switch self {
             case .noReceiverFound:
-                return "No EasyScreenShare PC found. Make sure the PC app is running and both devices are on the same Wi-Fi."
+                return "No EasyScreenShare PC found. Make sure the PC app is running, both devices are on the same Wi-Fi, and Windows Firewall allows EasyScreenShare on private networks."
             case .localNetworkDenied:
                 return "EasyScreenShare needs Local Network access. Turn it on in Settings › Privacy & Security › Local Network."
             case .disconnected(let reason):
@@ -28,13 +28,12 @@ final class StreamLink {
     /// When more than this is waiting to be sent (slow Wi-Fi), video frames are
     /// dropped until the backlog clears and the next keyframe arrives.
     private static let maxPendingBytes = 1_500_000
-    private static let discoveryTimeout: TimeInterval = 15
+    private static let discoveryTimeout: TimeInterval = 20
 
     private let queue = DispatchQueue(label: "EasyScreenShare.link", qos: .userInteractive)
     private let deviceName: String
-    private var browser: NWBrowser?
+    private var finder: PCFinder?
     private var connection: NWConnection?
-    private var candidates: [NWEndpoint] = []
     private var isReady = false
     private var isStopped = false
     private var pendingBytes = 0
@@ -46,27 +45,14 @@ final class StreamLink {
 
     func start() {
         queue.async { [self] in
-            let browser = NWBrowser(for: .bonjour(type: StreamProtocol.serviceType, domain: nil), using: .tcp)
-            browser.browseResultsChangedHandler = { [weak self] results, _ in
-                guard let self else { return }
-                // Sorted so the phone and the app agree on which PC is used if there are several.
-                self.candidates = results.map(\.endpoint).sorted { $0.debugDescription < $1.debugDescription }
-                self.connectIfIdle()
+            let finder = PCFinder(queue: queue)
+            finder.onFound = { [weak self] pc in self?.use(pc) }
+            finder.onScanFinished = { [weak self] localNetworkDenied in
+                guard let self, !self.isReady, localNetworkDenied else { return }
+                self.fail(LinkError.localNetworkDenied)
             }
-            browser.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .waiting(let error), .failed(let error):
-                    if case .dns(let code) = error, code == StreamProtocol.dnsPolicyDenied {
-                        self?.fail(LinkError.localNetworkDenied)
-                    } else if case .failed = state {
-                        self?.fail(error)
-                    }
-                default:
-                    break
-                }
-            }
-            self.browser = browser
-            browser.start(queue: queue)
+            self.finder = finder
+            finder.start()
 
             queue.asyncAfter(deadline: .now() + Self.discoveryTimeout) { [weak self] in
                 guard let self, !self.isReady else { return }
@@ -115,41 +101,27 @@ final class StreamLink {
 
     // MARK: - Private (on `queue`)
 
-    private func connectIfIdle() {
-        guard connection == nil, !isStopped, let endpoint = candidates.first else { return }
+    private func use(_ pc: PCFinder.PC) {
+        guard connection == nil, !isStopped else {
+            pc.connection.cancel()
+            return
+        }
+        finder?.stop()
+        finder = nil
 
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        let connection = NWConnection(to: endpoint, using: NWParameters(tls: nil, tcp: tcp))
+        let connection = pc.connection
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let self, let connection, connection === self.connection else { return }
             switch state {
-            case .ready:
-                self.didConnect()
             case .waiting(let error), .failed(let error):
-                if self.isReady {
-                    self.fail(LinkError.disconnected(error.localizedDescription))
-                } else {
-                    // Couldn't reach this PC; try the next one (or this one again) shortly.
-                    connection.cancel()
-                    self.connection = nil
-                    if !self.candidates.isEmpty {
-                        self.candidates.append(self.candidates.removeFirst())
-                    }
-                    self.queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.connectIfIdle() }
-                }
+                self.fail(LinkError.disconnected(error.localizedDescription))
             default:
                 break
             }
         }
         self.connection = connection
-        connection.start(queue: queue)
-    }
-
-    private func didConnect() {
         isReady = true
-        browser?.cancel()
-        browser = nil
+
         let hello: [String: Any] = ["name": deviceName, "version": StreamProtocol.version]
         send(.hello, (try? JSONSerialization.data(withJSONObject: hello)) ?? Data())
         onKeyframeRequest?()
@@ -203,8 +175,8 @@ final class StreamLink {
     private func shutdown() {
         isStopped = true
         isReady = false
-        browser?.cancel()
-        browser = nil
+        finder?.stop()
+        finder = nil
         connection?.cancel()
         connection = nil
     }

@@ -34,7 +34,7 @@ log = logging.getLogger("easyscreenshare")
 # Every message: [type: u8][payload length: u32 big-endian][payload]
 SERVICE_TYPE = "_easyscreenshare._tcp.local."
 DEFAULT_PORT = 50505
-MSG_HELLO = 0x01  # payload: UTF-8 JSON {"name": ..., "version": 1}
+MSG_HELLO = 0x01  # payload: UTF-8 JSON; PC sends GREETING first, phone answers {"name": ..., "version": 1}
 MSG_VIDEO = 0x02  # payload: VIDEO_HEADER + H.264 Annex B access unit
 MSG_AUDIO = 0x03  # payload: AUDIO_HEADER + int16 little-endian interleaved PCM
 MSG_REQUEST_KEYFRAME = 0x10  # PC -> phone, empty payload
@@ -42,6 +42,8 @@ MSG_HEADER = struct.Struct(">BI")
 VIDEO_HEADER = struct.Struct(">BBQ")  # orientation, flags (bit0 = keyframe), pts µs
 AUDIO_HEADER = struct.Struct(">IBQ")  # sample rate, channels, pts µs
 MAX_MESSAGE = 16 * 1024 * 1024
+GREETING_SERVICE = "easyscreenshare"  # lets the phone recognise us when it probes the subnet
+HELLO_TIMEOUT = 10.0
 
 # RPVideoSampleOrientationKey (CGImagePropertyOrientation) -> degrees counter-
 # clockwise to rotate the frame for display (pygame.transform.rotate convention).
@@ -172,7 +174,10 @@ class Stats:
 
 
 class Receiver:
-    """Accepts one phone at a time; a new connection replaces the old one."""
+    """Streams from one phone at a time; a new phone replaces the old one.
+
+    Connections that never say hello (the phone app probing for PCs) are
+    ignored and never interrupt the current stream."""
 
     def __init__(self, port: int, audio: AudioPlayer) -> None:
         self.audio = audio
@@ -205,18 +210,36 @@ class Receiver:
     def _accept_loop(self) -> None:
         while True:
             conn, addr = self.server.accept()
-            with self._lock:
-                old = self._sock
-                self._session += 1
-                session = self._session
-                self._sock = conn
-            if old is not None:
-                old.close()
-            log.info("Phone connected from %s", addr[0])
-            threading.Thread(target=self._run_session, args=(conn, session), daemon=True).start()
+            threading.Thread(target=self._handle, args=(conn, addr[0]), daemon=True).start()
+
+    def _handle(self, conn: socket.socket, address: str) -> None:
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            greeting = json.dumps({"service": GREETING_SERVICE, "name": socket.gethostname(), "version": 1}).encode()
+            conn.sendall(MSG_HEADER.pack(MSG_HELLO, len(greeting)) + greeting)
+            conn.settimeout(HELLO_TIMEOUT)
+            msg_type, length = MSG_HEADER.unpack(recv_exact(conn, MSG_HEADER.size))
+            if msg_type != MSG_HELLO or length > 4096:
+                raise ConnectionError("not an EasyScreenShare phone")
+            info = json.loads(recv_exact(conn, length).decode("utf-8"))
+            conn.settimeout(None)
+        except (OSError, ConnectionError, ValueError):
+            log.debug("Probe from %s", address)
+            conn.close()
+            return
+
+        with self._lock:
+            old = self._sock
+            self._session += 1
+            session = self._session
+            self._sock = conn
+            self.device_name = info.get("name", "iPhone")
+        if old is not None:
+            old.close()
+        log.info("Streaming from %s (%s)", self.device_name, address)
+        self._run_session(conn, session)
 
     def _run_session(self, conn: socket.socket, session: int) -> None:
-        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         decoder = av.CodecContext.create("h264", "r")
         decoder.flags |= int(av.codec.context.Flags.low_delay)
         decoder.thread_type = "SLICE"
@@ -231,6 +254,7 @@ class Receiver:
                 except OSError:
                     pass
 
+        request_keyframe()
         try:
             while True:
                 msg_type, length = MSG_HEADER.unpack(recv_exact(conn, MSG_HEADER.size))
@@ -256,11 +280,6 @@ class Receiver:
                     self.stats.add(length, False)
                     if session == self._session and channels:
                         self.audio.push(sample_rate, channels, payload[AUDIO_HEADER.size:])
-                elif msg_type == MSG_HELLO:
-                    info = json.loads(payload.decode("utf-8"))
-                    self.device_name = info.get("name", "iPhone")
-                    log.info("Streaming from %s", self.device_name)
-                    request_keyframe()
         except (OSError, ConnectionError, ValueError) as exc:
             log.info("Phone disconnected (%s)", exc)
         finally:
