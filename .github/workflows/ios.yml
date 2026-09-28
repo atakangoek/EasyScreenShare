@@ -1,0 +1,37 @@
+# Builds an unsigned EasyScreenShare.ipa on a GitHub-hosted Mac, for people
+# without a Mac. Sideload it with Sideloadly or AltStore (they sign it with
+# your Apple ID). Run it from the Actions tab ("Run workflow").
+name: Build iOS app (unsigned IPA)
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+
+jobs:
+  build:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Xcode project
+        run: brew install xcodegen && xcodegen generate
+      - name: Build
+        run: |
+          xcodebuild -project EasyScreenShare.xcodeproj -scheme EasyScreenShare \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/EasyScreenShare.app Payload/
+          test -d Payload/EasyScreenShare.app/PlugIns/EasyScreenShareBroadcast.appex
+          zip -qry EasyScreenShare-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EasyScreenShare-unsigned-ipa
+          path: ios/EasyScreenShare-unsigned.ipa

@@ -1,0 +1,6 @@
+av>=14
+ifaddr
+numpy
+pygame-ce>=2.5
+sounddevice
+zeroconf

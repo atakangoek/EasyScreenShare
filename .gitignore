@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+pc/build/
+pc/dist/
+pc/*.spec
+ios/*.xcodeproj/
+ios/App/Info.plist
+ios/BroadcastExtension/Info.plist
+ios/build/

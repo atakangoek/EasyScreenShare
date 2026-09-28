@@ -1,0 +1,59 @@
+# Xcode project definition. Generate EasyScreenShare.xcodeproj with:
+#   brew install xcodegen && xcodegen generate
+name: EasyScreenShare
+options:
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    # Bundle IDs must be unique to you: change this, e.g. com.<yourname>.easyscreenshare
+    APP_BUNDLE_ID: com.example.easyscreenshare
+    # Your Apple team ID (or pick the team in Xcode under Signing & Capabilities).
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+
+targets:
+  EasyScreenShare:
+    type: application
+    platform: iOS
+    sources: [App, Shared]
+    dependencies:
+      - target: EasyScreenShareBroadcast
+    scheme: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: EasyScreenShare
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown,
+           UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSLocalNetworkUsageDescription: EasyScreenShare finds your PC on the local network to stream your screen to it.
+        NSBonjourServices: [_easyscreenshare._tcp]
+        BroadcastExtensionBundleID: $(APP_BUNDLE_ID).broadcast
+
+  EasyScreenShareBroadcast:
+    type: app-extension
+    platform: iOS
+    sources: [BroadcastExtension, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).broadcast
+    info:
+      path: BroadcastExtension/Info.plist
+      properties:
+        CFBundleDisplayName: EasyScreenShare
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+        NSLocalNetworkUsageDescription: EasyScreenShare finds your PC on the local network to stream your screen to it.
+        NSBonjourServices: [_easyscreenshare._tcp]
