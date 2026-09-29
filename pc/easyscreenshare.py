@@ -2,7 +2,8 @@
 
 Advertises itself on the local network (Bonjour/mDNS) so the EasyScreenShare
 iPhone app can find it, then shows the phone's screen in a window and plays
-its audio.
+its audio. It also shows up as an AirPlay screen-mirroring target (airplay.py),
+so any iPhone/iPad can mirror via Control Center without the app.
 
 Keys:  F11 / double-click = fullscreen   M = mute   R = rotate 90°
        I = stats overlay                 Esc = leave fullscreen
@@ -19,9 +20,11 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import av
 import ifaddr
+import numpy as np
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame  # noqa: E402
@@ -79,6 +82,7 @@ class AudioPlayer:
         self._bytes_per_ms = 1.0
         self._primed = False
         self.muted = False
+        self.gain = 1.0  # the sender's volume (AirPlay volume buttons), 0..1
 
     @property
     def buffered_ms(self) -> float:
@@ -130,7 +134,12 @@ class AudioPlayer:
                     chunk += bytes(need - len(chunk))
             else:
                 chunk = bytes(need)
-        outdata[:] = bytes(need) if self.muted else chunk
+        gain = self.gain
+        if self.muted or gain <= 0:
+            chunk = bytes(need)
+        elif gain < 1:
+            chunk = (np.frombuffer(chunk, np.int16) * gain).astype(np.int16).tobytes()
+        outdata[:] = chunk
 
     def close(self) -> None:
         if self._stream is not None:
@@ -151,7 +160,6 @@ class AudioPlayer:
 class DecodedFrame:
     frame: av.VideoFrame
     rotation: int  # degrees counter-clockwise
-    session: int
 
 
 class Stats:
@@ -177,7 +185,8 @@ class Receiver:
     """Streams from one phone at a time; a new phone replaces the old one.
 
     Connections that never say hello (the phone app probing for PCs) are
-    ignored and never interrupt the current stream."""
+    ignored and never interrupt the current stream. Other stream sources
+    (AirPlay) share the window through begin/publish/end_session."""
 
     def __init__(self, port: int, audio: AudioPlayer) -> None:
         self.audio = audio
@@ -186,7 +195,7 @@ class Receiver:
         self._lock = threading.Lock()
         self._latest: DecodedFrame | None = None
         self._session = 0
-        self._sock: socket.socket | None = None
+        self._close_current: Callable[[], None] | None = None
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -200,12 +209,42 @@ class Receiver:
 
     @property
     def connected(self) -> bool:
-        return self._sock is not None
+        return self._close_current is not None
 
     def take_frame(self) -> DecodedFrame | None:
         with self._lock:
             frame, self._latest = self._latest, None
             return frame
+
+    def begin_session(self, name: str, close: Callable[[], None]) -> int:
+        """Makes a new stream the one on screen; `close` stops it if another replaces it."""
+        with self._lock:
+            old = self._close_current
+            self._session += 1
+            self._close_current = close
+            self.device_name = name
+            session = self._session
+        if old is not None:
+            old()
+        self.audio.gain = 1.0
+        return session
+
+    def is_current(self, session: int) -> bool:
+        return session == self._session
+
+    def publish_frame(self, session: int, frame: av.VideoFrame, rotation: int = 0) -> None:
+        with self._lock:
+            if session == self._session:
+                self._latest = DecodedFrame(frame, rotation)
+
+    def end_session(self, session: int) -> None:
+        with self._lock:
+            if session != self._session:
+                return
+            self._close_current = None
+            self._latest = None
+            self.device_name = None
+        self.audio.close()
 
     def _accept_loop(self) -> None:
         while True:
@@ -228,14 +267,7 @@ class Receiver:
             conn.close()
             return
 
-        with self._lock:
-            old = self._sock
-            self._session += 1
-            session = self._session
-            self._sock = conn
-            self.device_name = info.get("name", "iPhone")
-        if old is not None:
-            old.close()
+        session = self.begin_session(info.get("name", "iPhone"), conn.close)
         log.info("Streaming from %s (%s)", self.device_name, address)
         self._run_session(conn, session)
 
@@ -271,26 +303,17 @@ class Receiver:
                         request_keyframe()
                         continue
                     if frames:
-                        rotation = ORIENTATION_TO_ROTATION.get(orientation, 0)
-                        with self._lock:
-                            if session == self._session:
-                                self._latest = DecodedFrame(frames[-1], rotation, session)
+                        self.publish_frame(session, frames[-1], ORIENTATION_TO_ROTATION.get(orientation, 0))
                 elif msg_type == MSG_AUDIO:
                     sample_rate, channels, _pts = AUDIO_HEADER.unpack_from(payload)
                     self.stats.add(length, False)
-                    if session == self._session and channels:
+                    if self.is_current(session) and channels:
                         self.audio.push(sample_rate, channels, payload[AUDIO_HEADER.size:])
         except (OSError, ConnectionError, ValueError) as exc:
             log.info("Phone disconnected (%s)", exc)
         finally:
             conn.close()
-            with self._lock:
-                if session == self._session:
-                    self._sock = None
-                    self._latest = None
-                    self.device_name = None
-            if session == self._session:
-                self.audio.close()
+            self.end_session(session)
 
 
 def recv_exact(conn: socket.socket, n: int) -> bytes:
@@ -306,13 +329,12 @@ def recv_exact(conn: socket.socket, n: int) -> bytes:
 
 
 # --- Discovery -----------------------------------------------------------------
-def advertise(port: int) -> tuple[Zeroconf, ServiceInfo]:
+def advertise(port: int, addresses: list[str]) -> tuple[Zeroconf, ServiceInfo]:
     host = socket.gethostname()
-    addrs = local_ipv4_addresses()
     info = ServiceInfo(
         SERVICE_TYPE,
         f"{host}.{SERVICE_TYPE}",
-        addresses=[socket.inet_aton(a) for a in addrs],
+        addresses=[socket.inet_aton(a) for a in addresses],
         port=port,
         properties={"v": "1"},
         server=f"{host}.local.",
@@ -324,9 +346,10 @@ def advertise(port: int) -> tuple[Zeroconf, ServiceInfo]:
 
 # --- Window --------------------------------------------------------------------
 class Viewer:
-    def __init__(self, receiver: Receiver, audio: AudioPlayer) -> None:
+    def __init__(self, receiver: Receiver, audio: AudioPlayer, airplay_name: str | None = None) -> None:
         self.receiver = receiver
         self.audio = audio
+        self.airplay_name = airplay_name
         pygame.init()
         desktop_w, desktop_h = pygame.display.get_desktop_sizes()[0]
         self.max_window = (int(desktop_w * 0.9), int(desktop_h * 0.9))
@@ -447,11 +470,15 @@ class Viewer:
 
     def _draw_waiting(self, screen: pygame.Surface) -> None:
         sw, sh = screen.get_size()
+        device = self.receiver.device_name
         lines = [
-            ("Waiting for your iPhone…", self.font, (240, 240, 240)),
+            (f"Connected to {device}…" if device else "Waiting for your iPhone…", self.font, (240, 240, 240)),
             ("", self.small, (0, 0, 0)),
             ("On the phone: open EasyScreenShare", self.small, (170, 170, 170)),
             ("and tap “Start streaming”.", self.small, (170, 170, 170)),
+            *([("Or, without the app: Control Center ›", self.small, (170, 170, 170)),
+               (f"Screen Mirroring › “{self.airplay_name}”.", self.small, (170, 170, 170))]
+              if self.airplay_name else []),
             ("", self.small, (0, 0, 0)),
             (f"This PC: {socket.gethostname()}", self.small, (120, 120, 120)),
             (f"{', '.join(local_ipv4_addresses()) or 'no network'} : {self.receiver.port}",
@@ -468,6 +495,8 @@ class Viewer:
 def main() -> None:
     parser = argparse.ArgumentParser(description="EasyScreenShare PC receiver")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--no-airplay", action="store_true", help="don't offer AirPlay screen mirroring")
+    parser.add_argument("--name", default=socket.gethostname(), help="name shown in the iPhone's Screen Mirroring list")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -475,13 +504,22 @@ def main() -> None:
 
     audio = AudioPlayer()
     receiver = Receiver(args.port, audio)
-    zc, info = advertise(receiver.port)
-    log.info("Listening on port %d as '%s' (%s)", receiver.port, info.name,
-             ", ".join(local_ipv4_addresses()))
+    addresses = local_ipv4_addresses()
+    zc, info = advertise(receiver.port, addresses)
+    log.info("Listening on port %d as '%s' (%s)", receiver.port, info.name, ", ".join(addresses))
+    airplay_server = None
+    if not args.no_airplay:
+        try:
+            import airplay
+        except ImportError as exc:
+            log.warning("AirPlay mirroring is off (%s); run: pip install -r requirements.txt", exc)
+        else:
+            airplay_server = airplay.AirPlayServer(receiver, args.name)
+            airplay_server.advertise(zc, addresses)
     try:
-        Viewer(receiver, audio).run()
+        Viewer(receiver, audio, airplay_server and airplay_server.name).run()
     finally:
-        zc.unregister_service(info)
+        zc.unregister_all_services()
         zc.close()
         audio.close()
         pygame.quit()

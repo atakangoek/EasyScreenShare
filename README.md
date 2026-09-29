@@ -30,6 +30,16 @@ Your Wi-Fi must be set as a *Private* network in Windows (Settings › Network �
 
 The window reshapes itself when you rotate the phone.
 
+Options: `--name "Living room PC"` sets the name in the iPhone's Screen Mirroring list, `--no-airplay` turns AirPlay off, `--verbose` logs more.
+
+## No app? Use AirPlay Screen Mirroring
+The PC also shows up as an AirPlay screen-mirroring target, like an Apple TV. On any iPhone or iPad on the same Wi-Fi: **Control Center › Screen Mirroring › *your PC's name***. Video and sound both come through, and the phone's volume buttons work.
+
+- No PIN is asked: anyone on your Wi-Fi can mirror to the PC while it's running (use `--no-airplay` on shared networks).
+- It uses TCP port 7000 plus a few random ports, so allow the Windows Firewall prompt as above.
+- The PC's AirPlay identity is kept in `%APPDATA%\EasyScreenShare\airplay.json`. Delete it to appear as a new device.
+- The FairPlay part comes from [openairplay/airplay2-receiver](https://github.com/openairplay/airplay2-receiver) (GPLv2); see `pc/vendor/README.md`.
+
 ## iPhone
 
 The iOS app has to be compiled on a Mac (Apple's rule). Pick one:
@@ -60,6 +70,8 @@ On the phone you may need to enable **Settings › Privacy & Security › Develo
 
 ## Testing the PC side without a phone
 `pc/.venv/Scripts/python pc/tools/fake_iphone.py` finds the receiver just like the phone does and streams a test pattern with a 440 Hz tone, rotating every 5 s.
+
+`pc/.venv/Scripts/python pc/tools/fake_airplay.py` does the same over AirPlay (to `127.0.0.1:7000`, or `--host`): pairing, the FairPlay handshake with a known key, then encrypted video and audio the way iOS sends them.
 
 ## Protocol
 TCP messages: `[type u8][length u32 BE][payload]`. `0x01` hello (JSON), `0x02` video (`orientation u8, flags u8, pts u64` + H.264 Annex B), `0x03` audio (`rate u32, channels u8, pts u64` + s16le interleaved PCM), `0x10` PC→phone keyframe request. Bonjour service type `_easyscreenshare._tcp`.
